@@ -216,3 +216,220 @@ browser.quit()
 1. 데이터 추출에 대한 시간이 오래 걸려 줄인다
 2. 공지사항에 대한 웹 크로링 시도
 
+---
+
+First.Test
+1. 각 기능별 모듈화로 코드 재구성
+2. 멀티 프로세스를 이용한 접근
+3. 모든 수강과목에 대한 동시 접근 -> 데이터 출력
+
+```
+# pip install webdriver-manager # 크롬드라이버 자동설치
+# pip install selenium
+# pip install bs4
+# pip install lxml
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException # 예외지정
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import UnexpectedAlertPresentException as PE # 팝업 예외 지정
+from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup as bs
+from xml.dom.minidom import Element
+from multiprocessing import Pool
+
+import time
+import bs4
+import json
+import re
+
+# 로그인 정보
+userid = "20211954"
+password = "971126"
+
+def getprogress(ch):
+    if ch == "[진행중]" or ch == "[마감]" or ch == "[진행예정]":
+        return True
+    else:
+        return None
+
+# 과제 정보 가져오기
+def subject(i):
+    # 과제에 대한 리스트 선언
+    title_result = []
+    d_day_start_result = []
+    d_day_end_result = []
+    content_result = []
+    d_end_result = []
+    course_result = []
+    clear_result = []
+    progress_result = []
+
+    # json 리스트 선언
+    dict_key = []
+    temp_dict = {}
+
+    # 현재 수강 과목 리스트로 저장 (최대 8개)
+    subject_list = ['//*[@id="mCSB_1_container"]/li[1]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[2]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[3]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[4]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[5]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[6]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[7]/a/span[1]',
+                    '//*[@id="mCSB_1_container"]/li[8]/a/span[1]']
+
+    chrome_options = webdriver.ChromeOptions()
+
+    # 크롤링으로 인한 사이트 차단을 막음 추가
+    user_agent = "Mozilla/5.0 (Linux; Android 9; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.83 Mobile Safari/537.36" # 추가
+    chrome_options.add_argument('user-agent=' + user_agent) # 추가
+
+    # 브라우저 창 없이 실행
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-gpu")  # 추가
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+
+    # Chromedriver 경로 설정
+    browser = webdriver.Chrome(service = Service(ChromeDriverManager().install()), options = chrome_options)
+    # browser.maximize_window() # 전체 화면 설정
+
+    # url 이동
+    browser.get("https://lms.gwnu.ac.kr/Main.do?cmd=viewHome&userDTO.localeKey=ko")  # 변경
+
+    # id, pw 입력 기존 방식과 다른 붙여넣기 방식으로 입력
+    browser.execute_script("arguments[0].value=arguments[1]", browser.find_element(By.ID, "id"), userid) # 추가
+    browser.execute_script("arguments[0].value=arguments[1]", browser.find_element(By.ID, "pw"), password) # 추가
+
+    # 로그인 버튼 클릭
+    WebDriverWait(browser, 5).until(EC.element_to_be_clickable((By.XPATH, "//*[@id='loginForm']/fieldset/p[2]/a"))).click() # 변경
+
+    # 팝업창 삭제
+    try :
+        browser.find_element((By.XPATH, "/html/body/div[4]/div[1]/button/span[1]")).click() # 추가
+    except :
+        pass
+
+    # 리스트에 없는 과목 예외처리
+    try :
+        browser.find_element(By.XPATH, subject_list[i])
+    except :
+        # 브라우저 종료
+        browser.quit()
+        return None
+
+    # 수강과목 클릭
+    browser.find_element(By.XPATH, subject_list[i]).click()
+
+    try : 
+        WebDriverWait(browser, 0.2).until(EC.alert_is_present())
+        alert = browser.switch_to.alert
+
+        alert.dismiss()
+
+        alert.accept()
+
+    except :        
+            # 수강과목 과제 클릭
+            WebDriverWait(browser, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="3"]/ul/li[2]/a'))).click() # 추가
+
+            # 수강과목 이름,과제내용 가져오기
+            source = browser.page_source
+            bs = bs4.BeautifulSoup(source, 'lxml')
+
+            # 과제제목 크롤링
+            titles = bs.find_all('h4','f14')
+            # 제출기한 크롤링
+            d_days = bs.find_all('table','boardListInfo')
+            # 제출기한 시작과 끝 분할
+            slice1 = slice(16)
+            slice2 = slice(19, 35)
+            # 과제내용 크롤링
+            contents = bs.find_all('div','cont pb0')
+            # 과목이름 크롤링
+            course = bs.find('h1','f40')
+            # 과제진행여부 크롤링 추가
+            progresses = bs.find_all('span','f12')
+
+            # 과제제목 저장, 과목이름 저장
+            for title in titles:
+                title_result.append(title.get_text().strip().replace("\t","").replace("\n","").replace("\xa0",""))
+                course_result.append(course.get_text().replace("\t","").replace("\n","").replace("\xa0",""))
+
+            # 제출기한 시작 저장
+            for d_day_start in d_days:
+                d_day_start_result.append(d_day_start.get_text().replace("\t","").replace("\n","").replace("\xa0","").replace("과제 정보 리스트제출기간점수공개일자연장제출제출여부평가점수","")[slice1])
+            
+            # 제출기한 끝 저장
+            for d_day_end in d_days:
+                d_day_end_result.append(d_day_end.get_text().replace("\t","").replace("\n","").replace("\xa0","").replace("과제 정보 리스트제출기간점수공개일자연장제출제출여부평가점수","")[slice2])
+                
+            # 제출여부 저장
+            for clear in d_days:
+                clear_result.append(clear.get_text().replace("\t","").replace("\n","").replace("\xa0","")
+                                                    .replace("과제 정보 리스트제출기간점수공개일자연장제출제출여부평가점수","")
+                                                    .replace("1","").replace("2","").replace("3","").replace("4","")
+                                                    .replace("5","").replace("6","").replace("7","").replace("8","")
+                                                    .replace("9","").replace("0","").replace("-","").replace(".","")
+                                                    .replace("~","").replace(":","").replace(" ","").replace("(","")
+                                                    .replace(")","").replace("미허용","").replace("허","").replace("용",""))
+                
+            # 과제내용 저장
+            for content in contents:
+                content_result.append(content.get_text().replace("\t","").replace("\n","").replace("\xa0",""))
+            
+
+            # 과제진행여부 저장 추가
+            for progress in progresses:
+                progress_result.append(progress.get_text().replace("\t","").replace("\n","").replace("\xa0",""))
+
+            progress_result = list(filter(getprogress, progress_result)) 
+
+            count = len(title_result)
+
+            for i in range(count):
+                if progress_result[i] == "[진행중]" or progress_result[i] == "[진행예정]":
+                    temp_dict = {"course" : course_result[i], "title" : title_result[i], "d_day_start" : d_day_start_result[i], 
+                                 "d_day_end" : d_day_end_result[i], "clear" : clear_result[i], "content" : content_result[i]}
+                    dict_key.append(temp_dict)
+                else:
+                    pass
+
+            return dict_key
+
+if __name__ == '__main__':
+    start_time = time.time()
+
+    p = Pool(8)
+    num_list = [1,2,3,4,5,6,7,8]
+
+    # 멀티프로세서로 수강과목의 과제들을 리턴 받음
+    temp_dicts = p.map(subject, num_list)
+
+    # 리턴한 값 중 None 값을 제거
+    temp_dicts = list(filter(None, temp_dicts))
+
+    # 2차원 리스트를 1차원으로 만들어줌
+    temp_dicts2 = sum(temp_dicts,[])
+
+    # json 딕셔너리 형식으로 저장
+    b_dict = {"tasks": temp_dicts2}
+    
+    with open('./'+ userid +'.json', 'w', encoding = "UTF-8") as f :
+        json.dump(b_dict, f, ensure_ascii = False, default = str, indent = 4)
+
+    print("모든 과제를 불러왔습니다.")
+    print(time.time() - start_time)
+    
+    p.close()
+    p.join()
+```
+
+추후 진행사항
+1. 멀티 프로세스Pool()을 이용한 여러개의 스레드로 크롤링 진행
+2. 시간이 단축 되었지만 아직 부족한 상황
+3. CPU 성능에 따라 스레드 활용성이 달라 몇개의 스레드가 제일 효율이 높은지 테스트
